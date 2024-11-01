@@ -6,7 +6,28 @@ on:
       - 'v*'
 
 jobs:
-  build-and-publish:
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    outputs:
+      release_body: ${{ steps.git-cliff.outputs.content }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: cliff.toml
+          args: -vv --latest --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+  publish-with-poetry:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,3 +54,40 @@ jobs:
       #   uses: python-semantic-release/python-semantic-release@master
       #   with:
       #     github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  github-release:
+    name: Sign the Python 🐍 distribution 📦 with Sigstore and upload them to GitHub Release
+    needs:
+      - changelog
+      - publish-with-poetry
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # IMPORTANT: mandatory for making GitHub Releases
+      id-token: write  # IMPORTANT: mandatory for sigstore
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Sign the dists with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        with:
+          inputs: >-
+            ./dist/*.tar.gz
+            ./dist/*.whl
+
+      - name: Upload the release
+        needs: changelog
+        runs-on: ubuntu-latest
+        steps:
+          - name: Upload the binary releases
+            uses: svenstaro/upload-release-action@v2
+            with:
+              file: dist/**
+              repo_token: ${{ secrets.GITHUB_TOKEN }}
+              tag: ${{ github.ref }}
+              body: ${{ needs.changelog.outputs.release_body }}
